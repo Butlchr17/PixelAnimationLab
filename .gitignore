@@ -50,16 +50,37 @@ build/
 .DS_Store
 Thumbs.db
 
-# Project specific ignores
-# Temporary or generated files
+# ========================================
+# Project Specific - PixelAnimationLab
+# ========================================
+
+# User project / save files
+# We strongly recommend saving your .pxf files inside the projects/ folder.
+projects/
+saves/
+*.pxf
+!examples/*.pxf          
+# Allow example project files in an examples/ folder
+
+# Backup and temp files
 *.pxf.bak
+*.bak
 *.tmp
+*.temp
 *.log
 logs/
+temp/
+tmp/
 
-# Assets that shouldn't be committed (if any)
+# Assets that shouldn't be committed
 assets/generated/
 assets/cache/
+assets/temp/
+
+# Any local development or debugging files
+debug_*.py
+*.debug
+*.profile
 
 # Testing
 .coverage
