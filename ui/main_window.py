@@ -22,14 +22,14 @@ import pygame
 from pygame.locals import QUIT, KEYDOWN, K_ESCAPE, MOUSEWHEEL
 
 from utils.config import Config
+from ui.canvas import Canvas
+from core.layer import Layer
+
+from ui.panels.layers_panel import LayersPanel
 
 
 class MainWindow:
     """The primary application window and event loop."""
-
-    # Smooth zoom steps. Much nicer for pixel art work than pure doubling.
-    # Feel free to tweak this list.
-    ZOOM_LEVELS: list[int] = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64]
 
     def __init__(self, config: Config):
         self.config = config
@@ -37,17 +37,28 @@ class MainWindow:
         self.clock: pygame.time.Clock | None = None
         self.running = False
 
-        # === Canvas state (will move to a proper Canvas class later) ===
-        self.zoom: int = self.config.default_zoom
-        self.logical_width: int = 32   # Size of the sprite in pixels (temporary)
-        self.logical_height: int = 32
+        # === Real Canvas ===
+        self.canvas: Canvas
+        self._init_demo_canvas()
 
-        # Screen position of the top-left corner of logical pixel (0,0)
-        self.canvas_x: int = 0
-        self.canvas_y: int = 0
+        # === Real Panels ===
+        self.layers_panel = LayersPanel()
 
+        # Mouse tracking (used by Canvas for cursor-centered zoom)
         self.mouse_pos: tuple[int, int] = (0, 0)
-        self._canvas_initialized: bool = False  # used to center on first draw
+
+    def _init_demo_canvas(self) -> None:
+        """Create a small demo layer so the Canvas has something to display."""
+        demo_layer = Layer(32, 32, name="Demo Layer")
+        # Draw a simple test pattern
+        for y in range(32):
+            for x in range(32):
+                if (x + y) % 8 == 0:
+                    demo_layer.set_pixel(x, y, (255, 200, 80, 255))
+                elif x % 4 == 0 or y % 4 == 0:
+                    demo_layer.set_pixel(x, y, (60, 60, 80, 255))
+
+        self.canvas = Canvas(32, 32, layer=demo_layer)
 
         # Future: We will store references to panels here
         # self.canvas = None
@@ -79,99 +90,26 @@ class MainWindow:
                 if event.key == K_ESCAPE:
                     self.running = False
 
-                # === Basic Zoom Controls (temporary, will move to Canvas) ===
-                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS):
-                    self.zoom_in(around=self.mouse_pos)
-                elif event.key == pygame.K_MINUS:
-                    self.zoom_out(around=self.mouse_pos)
+                # Note: + / - zoom handling was moved to the Canvas class.
+                # These keys are now free for future shortcuts (e.g. tool options).
 
             elif event.type == pygame.MOUSEMOTION:
                 self.mouse_pos = event.pos
 
-            elif event.type == MOUSEWHEEL:
-                # Ctrl + Scroll Wheel = Zoom (very common in pixel art editors)
-                mods = pygame.key.get_mods()
-                if mods & pygame.KMOD_CTRL:
-                    if event.y > 0:
-                        self.zoom_in(around=self.mouse_pos)
-                    elif event.y < 0:
-                        self.zoom_out(around=self.mouse_pos)
+            # Forward to real panels (they return True if they consumed the event)
+            if self.layers_panel.handle_event(event):
+                pass  # event consumed
 
             # TODO: Forward events to active panels / tools
-            # Example:
-            # self.canvas.handle_event(event)
+            # For now, the Canvas handles its own panning and zoom input
+            self.canvas.handle_event(event)
 
     def update(self, dt: float) -> None:
         """Update game / UI state (not rendering)."""
+        self.layers_panel.update(dt)
         # TODO: Update animations, hover states, etc.
-        pass
 
-    # === Temporary Zoom Helpers (will live in Canvas class later) ===
-
-    def zoom_in(self, around: tuple[int, int] | None = None) -> None:
-        """Increase zoom level using the smooth ZOOM_LEVELS list.
-        If `around` (screen coords) is provided and valid, the zoom centers on that point."""
-        new_zoom = self._get_next_zoom_level(self.zoom, direction=1)
-        self._apply_zoom(new_zoom, around)
-
-    def zoom_out(self, around: tuple[int, int] | None = None) -> None:
-        """Decrease zoom level using the smooth ZOOM_LEVELS list."""
-        new_zoom = self._get_next_zoom_level(self.zoom, direction=-1)
-        self._apply_zoom(new_zoom, around)
-
-    def _get_next_zoom_level(self, current: int, direction: int) -> int:
-        """Return the next appropriate zoom level from ZOOM_LEVELS.
-        direction = 1 for zoom in, -1 for zoom out."""
-        levels = self.ZOOM_LEVELS
-        if direction > 0:
-            for level in levels:
-                if level > current:
-                    return level
-            return levels[-1]  # already at max
-        else:
-            for level in reversed(levels):
-                if level < current:
-                    return level
-            return levels[0]  # already at min
-
-    def _apply_zoom(self, new_zoom: int, around: tuple[int, int] | None = None) -> None:
-        """Core zoom logic. Zooms around the given screen point if provided and
-        the point is inside the working area."""
-        if new_zoom == self.zoom:
-            return
-
-        # Determine the anchor point in screen space
-        if around is None:
-            anchor_x, anchor_y = self.mouse_pos
-        else:
-            anchor_x, anchor_y = around
-
-        # Only do cursor-centered zoom if the mouse is inside the working area
-        # (between panels). Otherwise just change zoom and keep current offset.
-        work_rect = self._get_working_rect()
-        if not work_rect.collidepoint(anchor_x, anchor_y):
-            self.zoom = new_zoom
-            return
-
-        # Convert anchor screen point to logical pixel coordinates (before zoom change)
-        logical_x = (anchor_x - self.canvas_x) / self.zoom
-        logical_y = (anchor_y - self.canvas_y) / self.zoom
-
-        # Change zoom
-        self.zoom = new_zoom
-
-        # Reposition canvas so the same logical point stays under the anchor
-        self.canvas_x = int(anchor_x - logical_x * self.zoom)
-        self.canvas_y = int(anchor_y - logical_y * self.zoom)
-
-    def _get_working_rect(self) -> pygame.Rect:
-        """Returns the rectangle of the central working area (excluding fake panels)."""
-        w, h = self.config.width, self.config.height
-        top = 32 + 8
-        left = 48 + 8
-        right = w - 180 - 8
-        bottom = h - 80 - 8
-        return pygame.Rect(left, top, right - left, bottom - top)
+    # Note: Zoom and pan logic now lives in the Canvas class (ui-step2)
 
     def draw(self) -> None:
         """Render everything to the screen."""
@@ -233,26 +171,16 @@ class MainWindow:
             self.screen.blit(surf, (6, y))
             y += 22
 
-        # === Right Layers Panel ===
-        pygame.draw.rect(self.screen, panel_bg, (w - layers_width, top_height, layers_width, h - top_height - timeline_height))
-        pygame.draw.line(self.screen, (60, 60, 65), (w - layers_width, top_height), (w - layers_width, h - timeline_height), 1)
-
-        label = font_normal.render("Layers", True, accent)
-        self.screen.blit(label, (w - layers_width + 10, top_height + 8))
-
-        layers = ["Background", "Character", "Effects", "UI"]
-        ly = top_height + 35
-        for i, layer in enumerate(layers):
-            prefix = "● " if i == 1 else "○ "
-            surf = font_small.render(prefix + layer, True, text_col)
-            self.screen.blit(surf, (w - layers_width + 10, ly))
-            ly += 18
+        # === Real Layers Panel ===
+        layers_rect = pygame.Rect(w - layers_width, top_height, layers_width, h - top_height - timeline_height)
+        self.layers_panel.set_rect(layers_rect)
+        self.layers_panel.draw(self.screen)
 
         # === Bottom Timeline ===
         pygame.draw.rect(self.screen, (35, 35, 40), (0, h - timeline_height, w, timeline_height))
         pygame.draw.line(self.screen, (60, 60, 65), (0, h - timeline_height), (w, h - timeline_height), 1)
 
-        tlabel = font_normal.render(f"Timeline  |  Frame 1 / 12   FPS: 12   Zoom: {self.zoom}x", True, text_col)
+        tlabel = font_normal.render(f"Timeline  |  Frame 1 / 12   FPS: 12   Zoom: {self.canvas.get_zoom()}x", True, text_col)
         self.screen.blit(tlabel, (12, h - timeline_height + 8))
 
         fx = 20
@@ -263,65 +191,28 @@ class MainWindow:
             fx += 38
 
         # ============================================================
-        # === ZOOMABLE CANVAS WITH CURSOR-CENTERED ZOOM ===
+        # === REAL CANVAS (ui-step2) ===
         # ============================================================
 
-        # Working area rect (used for zoom anchoring and layout)
+        # Define the working area for the canvas
         work_left = tools_width + 8
         work_right = w - layers_width - 8
         work_top = top_height + 8
         work_bottom = h - timeline_height - 8
 
-        work_w = work_right - work_left
-        work_h = work_bottom - work_top
-
-        # Initialize canvas centered on first draw
-        if not self._canvas_initialized:
-            canvas_pixel_w = self.logical_width * self.zoom
-            canvas_pixel_h = self.logical_height * self.zoom
-            self.canvas_x = work_left + (work_w - canvas_pixel_w) // 2
-            self.canvas_y = work_top + (work_h - canvas_pixel_h) // 2
-            self._canvas_initialized = True
-
-        cx, cy = self.canvas_x, self.canvas_y
-        cw = self.logical_width * self.zoom
-        ch = self.logical_height * self.zoom
-
-        # Canvas background
-        pygame.draw.rect(self.screen, self.config.canvas_bg, (cx, cy, cw, ch))
-        pygame.draw.rect(self.screen, (90, 90, 95), (cx - 1, cy - 1, cw + 2, ch + 2), 2)
-
-        # Label above the canvas
-        clabel = font_normal.render(f"Canvas ({self.logical_width}×{self.logical_height})", True, text_col)
-        self.screen.blit(clabel, (cx, cy - 20))
-
-        # Draw scaled grid (one line per logical pixel)
-        if self.config.show_grid and self.zoom >= 2:
-            grid_color = self.config.grid_color
-            for gx in range(self.logical_width + 1):
-                x = cx + gx * self.zoom
-                pygame.draw.line(self.screen, grid_color, (x, cy), (x, cy + ch))
-            for gy in range(self.logical_height + 1):
-                y = cy + gy * self.zoom
-                pygame.draw.line(self.screen, grid_color, (cx, y), (cx + cw, y))
-
-        # Draw a very simple placeholder "sprite" scaled by zoom
-        sprite_screen_x = cx + 4 * self.zoom
-        sprite_screen_y = cy + 4 * self.zoom
-        sprite_screen_w = 24 * self.zoom
-        sprite_screen_h = 24 * self.zoom
-
-        pygame.draw.rect(
-            self.screen,
-            (255, 180, 80),
-            (sprite_screen_x, sprite_screen_y, sprite_screen_w, sprite_screen_h),
-            2
+        canvas_rect = pygame.Rect(
+            work_left,
+            work_top,
+            work_right - work_left,
+            work_bottom - work_top,
         )
 
-        # Instructions
-        hint_font = pygame.font.SysFont("Arial", 11)
-        hint = hint_font.render("Ctrl+Scroll or + / - to zoom  |  Cursor-centered when mouse in working area", True, (150, 150, 155))
-        self.screen.blit(hint, (cx, cy + ch + 6))
+        # Let the real Canvas draw itself
+        self.canvas.draw(self.screen, canvas_rect)
+
+        # Small label above the real canvas (temporary)
+        clabel = font_normal.render("Real Canvas (ui-step2)", True, text_col)
+        self.screen.blit(clabel, (canvas_rect.x + 8, canvas_rect.y - 18))
 
     def run(self) -> None:
         """Main application loop."""
